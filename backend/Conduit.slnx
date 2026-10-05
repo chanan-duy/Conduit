@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="Conduit.Gateway/Conduit.Gateway.csproj" />
+  <Project Path="Conduit.Identity/Conduit.Identity.csproj" />
+  <Project Path="Conduit.Meetings/Conduit.Meetings.csproj" />
+  <Project Path="Conduit.Recording/Conduit.Recording.csproj" />
+  <Project Path="Conduit.Shared/Conduit.Shared.csproj" />
+</Solution>

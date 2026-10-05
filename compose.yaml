@@ -1,0 +1,172 @@
+name: conduit
+
+x-livekit: &livekit
+  LiveKit__ApiUrl: http://livekit:7880
+  LiveKit__ApiKey: ${LIVEKIT_API_KEY:-devkey}
+  LiveKit__ApiSecret: ${LIVEKIT_API_SECRET:-conduit-dev-secret-change-me-0123456789}
+
+x-internal: &internal
+  Internal__Key: ${INTERNAL_KEY:-conduit-dev-internal-key}
+  Jwt__MetadataAddress: http://identity:8080/.well-known/openid-configuration
+  Services__Identity: http://identity:8080/
+  Services__Meetings: http://meetings:8080/
+  Services__Recording: http://recording:8080/
+
+x-postgres: &postgres
+  image: postgres:17-alpine
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+    interval: 2s
+    timeout: 3s
+    retries: 30
+
+services:
+  gateway:
+    build:
+      context: ./backend
+      args:
+        SERVICE: Gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    environment:
+      ReverseProxy__Clusters__identity__Destinations__identity__Address: http://identity:8080/
+      ReverseProxy__Clusters__meetings__Destinations__meetings__Address: http://meetings:8080/
+      ReverseProxy__Clusters__recording__Destinations__recording__Address: http://recording:8080/
+      ReverseProxy__Clusters__web__Destinations__web__Address: http://web:80/
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+
+  identity:
+    build:
+      context: ./backend
+      args:
+        SERVICE: Identity
+    restart: unless-stopped
+    environment:
+      <<: *internal
+      ConnectionStrings__Identity: Host=identity-db;Database=identity;Username=identity;Password=identity;GSS Encryption Mode=Disable
+      Jwt__KeyPath: /keys/signing-key.pem
+    volumes:
+      - identity-keys:/keys
+    depends_on:
+      identity-db:
+        condition: service_healthy
+
+  meetings:
+    build:
+      context: ./backend
+      args:
+        SERVICE: Meetings
+    restart: unless-stopped
+    environment:
+      <<: [*internal, *livekit]
+      ConnectionStrings__Meetings: Host=meetings-db;Database=meetings;Username=meetings;Password=meetings;GSS Encryption Mode=Disable
+      LiveKit__PublicUrl: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+    depends_on:
+      meetings-db:
+        condition: service_healthy
+
+  recording:
+    build:
+      context: ./backend
+      args:
+        SERVICE: Recording
+    restart: unless-stopped
+    environment:
+      <<: [*internal, *livekit]
+      ConnectionStrings__Recording: Host=recording-db;Database=recording;Username=recording;Password=recording;GSS Encryption Mode=Disable
+      Recording__Directory: /recordings
+      Recording__EgressOutputDirectory: /out
+      Recording__BotPageUrl: http://gateway:8080/recording-bot
+    volumes:
+      - recordings:/recordings
+    depends_on:
+      recording-db:
+        condition: service_healthy
+
+  identity-db:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: identity
+      POSTGRES_USER: identity
+      POSTGRES_PASSWORD: identity
+    volumes:
+      - identity-db:/var/lib/postgresql/data
+
+  meetings-db:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: meetings
+      POSTGRES_USER: meetings
+      POSTGRES_PASSWORD: meetings
+    volumes:
+      - meetings-db:/var/lib/postgresql/data
+
+  recording-db:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: recording
+      POSTGRES_USER: recording
+      POSTGRES_PASSWORD: recording
+    volumes:
+      - recording-db:/var/lib/postgresql/data
+
+  livekit:
+    image: livekit/livekit-server:v1.13
+    restart: unless-stopped
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "40000-40100:40000-40100/udp"
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        rtc:
+          node_ip: ${LIVEKIT_NODE_IP:-}
+          tcp_port: 7881
+          port_range_start: 40000
+          port_range_end: 40100
+          use_external_ip: false
+        redis:
+          address: redis:6379
+        keys:
+          ${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-conduit-dev-secret-change-me-0123456789}
+        webhook:
+          api_key: ${LIVEKIT_API_KEY:-devkey}
+          urls:
+            - http://gateway:8080/webhooks/livekit
+    depends_on:
+      - redis
+
+  egress:
+    image: livekit/egress:v1.14
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      EGRESS_CONFIG_BODY: |
+        api_key: ${LIVEKIT_API_KEY:-devkey}
+        api_secret: ${LIVEKIT_API_SECRET:-conduit-dev-secret-change-me-0123456789}
+        ws_url: ws://livekit:7880
+        redis:
+          address: redis:6379
+    volumes:
+      - recordings:/out
+    depends_on:
+      - livekit
+      - recording
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+volumes:
+  identity-keys:
+  identity-db:
+  meetings-db:
+  recording-db:
+  recordings:

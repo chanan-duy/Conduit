@@ -1,0 +1,11 @@
+bin/
+obj/
+node_modules/
+dist/
+.idea/
+.vs/
+*.user
+*.DotSettings.user
+.env
+keys/
+recordings/
